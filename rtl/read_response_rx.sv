@@ -10,9 +10,7 @@ module read_response_rx #(
   input  logic clk,
   input  logic rst_n,
 
-  // -------------------------------
-  // From PTW (Non-AXI Response)
-  // -------------------------------
+  // From PTW
   input  logic               ptw_resp_valid,
   input  logic [PPN_W-1:0]   ptw_resp_ppn,
   input  logic [REQID_W-1:0] ptw_resp_req_id,
@@ -21,9 +19,7 @@ module read_response_rx #(
   input  logic [TYPE_W-1:0]  ptw_resp_type,
   input  logic               ptw_resp_dirty_upd,
 
-  // -------------------------------
-  // To MSHR ONLY
-  // -------------------------------
+  // To MSHR
   output logic               mshr_resp_valid,
   output logic [REQID_W-1:0] mshr_resp_req_id,
   output logic [PPN_W-1:0]   mshr_resp_ppn,
@@ -32,9 +28,6 @@ module read_response_rx #(
   output logic               mshr_resp_dirty_upd
 );
 
-  // ------------------------------------------------
-  // PTW Response Capture ? MSHR Forwarding
-  // ------------------------------------------------
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mshr_resp_valid     <= 1'b0;
@@ -44,11 +37,9 @@ module read_response_rx #(
       mshr_resp_error     <= 1'b0;
       mshr_resp_dirty_upd <= 1'b0;
     end else begin
-      // Default: deassert
-      mshr_resp_valid <= 1'b0;
-
+      mshr_resp_valid <= ptw_resp_valid;
+      
       if (ptw_resp_valid) begin
-        mshr_resp_valid     <= 1'b1;
         mshr_resp_req_id    <= ptw_resp_req_id;
         mshr_resp_ppn       <= ptw_resp_ppn;
         mshr_resp_pgsize    <= ptw_resp_pgsize;
@@ -59,4 +50,3 @@ module read_response_rx #(
   end
 
 endmodule
- 

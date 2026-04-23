@@ -1,6 +1,8 @@
 // =============================================================
-// L2 TLB PLRU – FINAL, SYNTHESIS SAFE
+// L2 TLB PLRU – FINAL, SYNTHESIS SAFE (Fixed Traversal)
 // =============================================================
+`timescale 1ns/1ps
+
 module l2_tlb_plru #(
   parameter int SETS = 32
 )(
@@ -18,29 +20,42 @@ module l2_tlb_plru #(
   logic [6:0] plru_tree [SETS-1:0];
 
   always_comb begin
-    if      (!way_valid_i[0]) replace_way_o = 0;
-    else if (!way_valid_i[1]) replace_way_o = 1;
-    else if (!way_valid_i[2]) replace_way_o = 2;
-    else if (!way_valid_i[3]) replace_way_o = 3;
-    else if (!way_valid_i[4]) replace_way_o = 4;
-    else if (!way_valid_i[5]) replace_way_o = 5;
-    else if (!way_valid_i[6]) replace_way_o = 6;
-    else if (!way_valid_i[7]) replace_way_o = 7;
+    if      (!way_valid_i[0]) replace_way_o = 3'd0;
+    else if (!way_valid_i[1]) replace_way_o = 3'd1;
+    else if (!way_valid_i[2]) replace_way_o = 3'd2;
+    else if (!way_valid_i[3]) replace_way_o = 3'd3;
+    else if (!way_valid_i[4]) replace_way_o = 3'd4;
+    else if (!way_valid_i[5]) replace_way_o = 3'd5;
+    else if (!way_valid_i[6]) replace_way_o = 3'd6;
+    else if (!way_valid_i[7]) replace_way_o = 3'd7;
     else begin
+      // Root Node
       replace_way_o[2] = plru_tree[set_idx_i][6];
-      replace_way_o[1] = replace_way_o[2] ? plru_tree[set_idx_i][4]
+      
+      // Level 1 Nodes
+      replace_way_o[1] = replace_way_o[2] ? plru_tree[set_idx_i][4] 
                                           : plru_tree[set_idx_i][5];
-      replace_way_o[0] = replace_way_o[1] ? plru_tree[set_idx_i][2]
-                                          : plru_tree[set_idx_i][3];
+      
+      // Level 2 Nodes (Leafs) - FIXED TO CHECK ROOT FIRST
+      if (!replace_way_o[2]) begin
+        // Left Subtree
+        replace_way_o[0] = replace_way_o[1] ? plru_tree[set_idx_i][2] 
+                                            : plru_tree[set_idx_i][3];
+      end else begin
+        // Right Subtree
+        replace_way_o[0] = replace_way_o[1] ? plru_tree[set_idx_i][0] 
+                                            : plru_tree[set_idx_i][1];
+      end
     end
   end
 
   always_ff @(posedge clk_i or negedge rstn_i) begin
     if (!rstn_i)
-      for (int i=0;i<SETS;i++)
+      for (int i=0; i<SETS; i++)
         plru_tree[i] <= 7'b0;
     else if (upd_en_i) begin
       plru_tree[set_idx_i][6] <= ~upd_way_i[2];
+      
       if (!upd_way_i[2]) begin
         plru_tree[set_idx_i][5] <= ~upd_way_i[1];
         if (!upd_way_i[1])

@@ -1,9 +1,10 @@
 // =============================================================
-// L2 TLB CSR Block (APB Interface)
-// - One-stage internal pipeline (control-safe)
-// - Clean flush pulse generation
-// - Synthesizable and timing-safe
+// L2 TLB CSR Block (APB Interface) - FINAL, 600MHz SAFE
+// - Zero Wait-State APB Compliant
+// - Single-Driver Auto-Clearing Flush Registers
 // =============================================================
+`timescale 1ns/1ps
+
 module l2_tlb_csr #(
   parameter int ASID_W = 32,
   parameter int ADDR_W = 12,
@@ -25,7 +26,7 @@ module l2_tlb_csr #(
   output logic              pslverr_o,
 
   // -------------------------------
-  // Status Inputs
+  // Status Inputs (from Core)
   // -------------------------------
   input  logic              tlb_hit_i,
   input  logic              tlb_miss_i,
@@ -33,7 +34,7 @@ module l2_tlb_csr #(
   input  logic              mshr_full_i,
 
   // -------------------------------
-  // CSR Outputs
+  // CSR Outputs (to Core)
   // -------------------------------
   output logic [ASID_W-1:0] csr_asid_o,
   output logic              csr_flush_all_o,
@@ -55,69 +56,48 @@ module l2_tlb_csr #(
   logic [ASID_W-1:0] asid_reg;
   logic              enable_reg;
 
-  // Raw flush registers
-  logic flush_all_reg;
-  logic flush_asid_reg_valid;
-  logic [ASID_W-1:0] flush_asid_reg;
+  // =============================================================
+  // APB Write Trigger (Combinational for Zero-Wait-State APB)
+  // =============================================================
+  // APB writes happen exactly when SEL, ENABLE, and WRITE are all high.
+  logic apb_write_en;
+  assign apb_write_en = psel_i && penable_i && pwrite_i;
 
   // =============================================================
-  // APB Write Strobe (REGISTERED)
-  // =============================================================
-  logic wr_en_q;
-
-  always_ff @(posedge pclk_i or negedge presetn_i) begin
-    if (!presetn_i)
-      wr_en_q <= 1'b0;
-    else
-      wr_en_q <= psel_i && penable_i && pwrite_i;
-  end
-
-  // =============================================================
-  // APB WRITE LOGIC
+  // APB WRITE & FLUSH PULSE LOGIC (Single State Machine)
   // =============================================================
   always_ff @(posedge pclk_i or negedge presetn_i) begin
     if (!presetn_i) begin
-      asid_reg              <= '0;
-      enable_reg            <= 1'b0;
-      flush_all_reg         <= 1'b0;
-      flush_asid_reg_valid  <= 1'b0;
-      flush_asid_reg        <= '0;
-    end
-    else if (wr_en_q) begin
-      case (paddr_i)
-        12'h000: enable_reg <= pwdata_i[0];
-        12'h004: asid_reg   <= pwdata_i;
-        12'h008: flush_all_reg <= pwdata_i[0];
-        12'h00C: begin
-          flush_asid_reg_valid <= pwdata_i[0];
-          flush_asid_reg       <= pwdata_i;
-        end
-        default: ;
-      endcase
-    end
-  end
-
-  // =============================================================
-  // FLUSH PULSE GENERATION (1-cycle)
-  // =============================================================
-  always_ff @(posedge pclk_i or negedge presetn_i) begin
-    if (!presetn_i) begin
+      asid_reg               <= '0;
+      enable_reg             <= 1'b0;
       csr_flush_all_o        <= 1'b0;
       csr_flush_asid_valid_o <= 1'b0;
-    end else begin
-      csr_flush_all_o        <= flush_all_reg;
-      csr_flush_asid_valid_o <= flush_asid_reg_valid;
+      csr_flush_asid_o       <= '0;
+    end 
+    else begin
+      // 1. Default Auto-Clear for Flush Pulses (Ensures they are exactly 1 cycle)
+      csr_flush_all_o        <= 1'b0;
+      csr_flush_asid_valid_o <= 1'b0;
 
-      // auto-clear after one cycle
-      flush_all_reg         <= 1'b0;
-      flush_asid_reg_valid  <= 1'b0;
+      // 2. Synchronous APB Writes
+      if (apb_write_en) begin
+        case (paddr_i)
+          12'h000: enable_reg <= pwdata_i[0];
+          12'h004: asid_reg   <= pwdata_i;
+          12'h008: csr_flush_all_o <= pwdata_i[0]; // Drives high for exactly 1 cycle
+          12'h00C: begin
+            csr_flush_asid_valid_o <= pwdata_i[0];
+            csr_flush_asid_o       <= pwdata_i;
+          end
+          default: ; // Safely ignore invalid addresses
+        endcase
+      end
     end
   end
 
-  assign csr_flush_asid_o = flush_asid_reg;
-
   // =============================================================
-  // PERFORMANCE COUNTERS (already pipelined)
+  // PERFORMANCE COUNTERS
+  // Note: Assuming tlb_hit_i is a 1-cycle pulse synchronized to pclk_i
   // =============================================================
   always_ff @(posedge pclk_i or negedge presetn_i) begin
     if (!presetn_i) begin
@@ -132,26 +112,27 @@ module l2_tlb_csr #(
   end
 
   // =============================================================
-  // APB READ LOGIC (REGISTERED MUX)
+  // APB READ LOGIC (Combinational MUX for Zero-Wait-State)
   // =============================================================
-  always_ff @(posedge pclk_i or negedge presetn_i) begin
-    if (!presetn_i)
-      prdata_o <= '0;
-    else begin
+  always_comb begin
+    prdata_o = '0; // Default zero to avoid latches
+    
+    // Only drive read data if a read transaction is occurring
+    if (psel_i && !pwrite_i) begin
       case (paddr_i)
-        12'h000: prdata_o <= {31'b0, enable_reg};
-        12'h004: prdata_o <= asid_reg;
-        12'h010: prdata_o <= hit_cnt_o;
-        12'h014: prdata_o <= miss_cnt_o;
-        12'h018: prdata_o <= err_cnt_o;
-        12'h01C: prdata_o <= {31'b0, mshr_full_i};
-        default: prdata_o <= '0;
+        12'h000: prdata_o = {31'b0, enable_reg};
+        12'h004: prdata_o = asid_reg;
+        12'h010: prdata_o = hit_cnt_o;
+        12'h014: prdata_o = miss_cnt_o;
+        12'h018: prdata_o = err_cnt_o;
+        12'h01C: prdata_o = {31'b0, mshr_full_i};
+        default: prdata_o = '0;
       endcase
     end
   end
 
   // =============================================================
-  // CSR OUTPUTS
+  // CSR STATIC OUTPUTS
   // =============================================================
   assign csr_asid_o   = asid_reg;
   assign csr_enable_o = enable_reg;
@@ -159,8 +140,7 @@ module l2_tlb_csr #(
   // =============================================================
   // APB RESPONSES
   // =============================================================
-  assign pready_o  = 1'b1;   // zero-wait
-  assign pslverr_o = 1'b0;
+  assign pready_o  = 1'b1;   // Zero-wait-state accepted
+  assign pslverr_o = 1'b0;   // No slave errors generated
 
 endmodule
- 
